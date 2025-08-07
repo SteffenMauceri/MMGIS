@@ -1,0 +1,27 @@
+{
+    "mission": "test",
+    "config": {
+        "msv": {
+            "view": {
+                "lon": -90,
+                "lat": 40,
+                "zoom": 3
+            }
+        },
+        "basemap": {
+            "name": "OpenStreetMap",
+            "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+            "tms": false,
+            "minZoom": 0,
+            "maxNativeZoom": 19,
+            "maxZoom": 22,
+            "variables": {
+                "subdomains": [
+                    "a",
+                    "b",
+                    "c"
+                ]
+            }
+        }
+    }
+}

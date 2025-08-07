@@ -1,0 +1,135 @@
+{
+    "mission": "Test",
+    "config": {
+        "msv": {
+            "mission": "Test",
+            "site": "",
+            "masterdb": false,
+            "view": [
+                "-4.557",
+                "137.43",
+                "11"
+            ],
+            "radius": {
+                "major": "3396190",
+                "minor": "3376200"
+            },
+            "mapscale": ""
+        },
+        "projection": {
+            "custom": false,
+            "epsg": "EPSG:4326",
+            "proj": "",
+            "globeproj": "webmercator",
+            "xmlpath": "",
+            "bounds": [
+                "",
+                "",
+                "",
+                ""
+            ],
+            "origin": [
+                "",
+                ""
+            ],
+            "reszoomlevel": "",
+            "resunitsperpixel": ""
+        },
+        "look": {
+            "pagename": "MMGIS",
+            "minimalist": false,
+            "topbar": true,
+            "toolbar": true,
+            "scalebar": true,
+            "coordinates": true,
+            "zoomcontrol": false,
+            "graticule": false,
+            "miscellaneous": true,
+            "bodycolor": "",
+            "topbarcolor": "",
+            "toolbarcolor": "",
+            "mapcolor": "",
+            "swap": true,
+            "copylink": true,
+            "screenshot": true,
+            "fullscreen": true,
+            "help": true,
+            "logourl": "",
+            "helpurl": ""
+        },
+        "panelSettings": {},
+        "panels": {
+            "viewer": true,
+            "map": true,
+            "globe": true
+        },
+        "time": {
+            "enabled": true
+        },
+        "tools": [
+            {
+                "name": "Layers",
+                "icon": "layers",
+                "js": "LayersTool"
+            },
+            {
+                "name": "Legend",
+                "icon": "format-list-bulleted-type",
+                "js": "LegendTool"
+            },
+            {
+                "name": "Info",
+                "icon": "information-variant",
+                "js": "InfoTool"
+            }
+        ],
+        "layers": [
+            {
+                "name": "Basemap",
+                "type": "tile",
+                "url": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "variables": {
+                    "tms": false,
+                    "subdomains": "abc"
+                }
+            },
+            {
+                "name": "Chems",
+                "type": "vector",
+                "url": "Missions/Test/Layers/ChemCam/chemcam.json",
+                "color": "#ff0000",
+                "variables": {
+                    "type": "geojson"
+                }
+            },
+            {
+                "name": "Lines",
+                "type": "vector",
+                "url": "Missions/Test/Layers/Line/line.json",
+                "color": "#00ff00",
+                "variables": {
+                    "type": "geojson"
+                }
+            },
+            {
+                "name": "Polygons",
+                "type": "vector",
+                "url": "Missions/Test/Layers/Polygon/polygon.geojson",
+                "color": "#0000ff",
+                "variables": {
+                    "type": "geojson"
+                }
+            },
+            {
+                "name": "Waypoints",
+                "type": "vector",
+                "url": "Missions/Test/Layers/Waypoints/waypoints.json",
+                "color": "#ffff00",
+                "variables": {
+                    "type": "geojson"
+                }
+            }
+        ]
+    }
+}
+
