@@ -86,15 +86,24 @@ async def mmgis_get_state() -> str:
                     } : null;
                     // Prefer human-readable layer names via getLayerConfigs using display_name/name
                     let layerNames = null;
+                    let layers = [];
+                    let visible = api.getVisibleLayers ? api.getVisibleLayers() : null;
                     try {
                         if (api.getLayerConfigs) {
                             const cfgs = api.getLayerConfigs();
                             if (cfgs && typeof cfgs === 'object') {
                                 layerNames = Object.values(cfgs).map(cfg => (cfg && (cfg.display_name || cfg.name)) || null).filter(Boolean);
+                                const entries = Object.entries(cfgs);
+                                for (const [key, cfg] of entries) {
+                                    const uuid = (cfg && cfg.uuid) ? cfg.uuid : key;
+                                    const name = (cfg && cfg.name) ? cfg.name : key;
+                                    const display_name = (cfg && (cfg.display_name || cfg.name)) ? (cfg.display_name || cfg.name) : name;
+                                    const isVisible = visible ? (visible[uuid] ?? visible[name] ?? false) : null;
+                                    layers.push({ uuid, name, display_name, visible: isVisible });
+                                }
                             }
                         }
                     } catch (_) {}
-                    const visible = api.getVisibleLayers ? api.getVisibleLayers() : null;
                     const time = api.getTime ? api.getTime() : null;
                     const startTime = api.getStartTime ? api.getStartTime() : null;
                     const endTime = api.getEndTime ? api.getEndTime() : null;
@@ -103,6 +112,7 @@ async def mmgis_get_state() -> str:
                     return {
                         visibleLayers: visible,
                         layerNames: layerNames,
+                        layers: layers,
                         time, startTime, endTime,
                         activeTool,
                         activeFeature,
@@ -168,20 +178,24 @@ def geocode_place(place: str) -> str:
 
 
 @tool
-def mmgis_find_layer(query: str) -> str:
+async def mmgis_find_layer(query: str) -> str:
     """
-    Find layers by human-readable name using mmgisAPI.getLayerConfigs().
+    Find layers by human-readable name using mmgisAPI.getLayerConfigs() live from the page.
     Performs case-insensitive substring matching with simple synonyms.
     Returns JSON { ok, matches: [ { name, display_name, uuid } ] }.
     """
     try:
-        # We'll gather configs using a small JS evaluation through a sync HTTP-like pattern isn't available, so use no-op and document.
-        # This tool is best invoked via mmgis_eval to list names, but we expose convenience here by reusing mmgis_eval logic inline.
-        # Since this is a sync tool, we cannot await page; use backend-agnostic fallback: scan from last_ui_state if available.
-        thread = get_current_thread()
-        memory = get_memory_store()
-        last = memory.get_last_ui_state(thread) or {}
-        # Attempt to construct configs from last.layers if present
+        page = await get_mmgis_page()
+        cfgs = await page.evaluate(
+            """
+            () => {
+                try {
+                    const api = window.mmgisAPI; if (!api || !api.getLayerConfigs) return {};
+                    return api.getLayerConfigs() || {};
+                } catch (e) { return {}; }
+            }
+            """
+        )
         matches: List[Dict[str, str]] = []
         q = (query or "").strip().lower()
         synonyms = {
@@ -189,34 +203,26 @@ def mmgis_find_layer(query: str) -> str:
             "wind": ["wind", "hrrr", "gfs"],
         }
         tokens = set(q.split())
-        # expand tokens
         expanded: List[str] = []
         for t in tokens:
             expanded.append(t)
             for syn in synonyms.get(t, []):
                 expanded.append(syn)
+
         def _score(name: str) -> int:
             n = (name or "").lower()
             return sum(1 for t in expanded if t and t in n)
 
-        # If we have rich layer info from last state
-        for layer in (last.get("layers") or []):
-            name = layer.get("display_name") or layer.get("name")
-            uuid = layer.get("uuid") or name
-            if not name:
-                continue
-            s = _score(name)
-            if s > 0:
-                matches.append({"name": name, "display_name": layer.get("display_name") or name, "uuid": uuid})
+        if isinstance(cfgs, dict):
+            for key, cfg in cfgs.items():
+                name = (cfg or {}).get("name") or key
+                disp = (cfg or {}).get("display_name") or name
+                uid = (cfg or {}).get("uuid") or key
+                s = _score(disp) or _score(name)
+                if s > 0:
+                    matches.append({"name": name, "display_name": disp, "uuid": uid})
 
-        # Also include names list fallback
-        for name in (last.get("layerNames") or []):
-            s = _score(name)
-            if s > 0 and not any(m.get("name") == name for m in matches):
-                matches.append({"name": name, "display_name": name, "uuid": name})
-
-        # Sort by score descending
-        matches.sort(key=lambda m: _score(m.get("name", "")), reverse=True)
+        matches.sort(key=lambda m: _score(m.get("display_name") or m.get("name") or ""), reverse=True)
         return json.dumps({"ok": True, "matches": matches})
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})
@@ -247,6 +253,45 @@ async def mmgis_set_view(lat: float, lng: float, zoom: Optional[int] = None) -> 
         current = await page.evaluate(
             "() => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return null; const c = m.getCenter(); return { lat: c.lat, lng: c.lng, zoom: m.getZoom() }; }"
         )
+        # Persist updated UI state after changing view
+        try:
+            state = await page.evaluate(
+                """
+                () => {
+                    try {
+                        const api = window.mmgisAPI; if (!api) return null;
+                        const map = api.map;
+                        const center = map ? map.getCenter() : null;
+                        const zoom = map ? map.getZoom() : null;
+                        const b = map ? map.getBounds() : null;
+                        const bounds = b ? { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() } : null;
+                        const visible = api.getVisibleLayers ? api.getVisibleLayers() : null;
+                        let layerNames = null; let layers = [];
+                        try {
+                            if (api.getLayerConfigs) {
+                                const cfgs = api.getLayerConfigs();
+                                if (cfgs && typeof cfgs === 'object') {
+                                    layerNames = Object.values(cfgs).map(cfg => (cfg && (cfg.display_name || cfg.name)) || null).filter(Boolean);
+                                    const entries = Object.entries(cfgs);
+                                    for (const [key, cfg] of entries) {
+                                        const uuid = (cfg && cfg.uuid) ? cfg.uuid : key;
+                                        const name = (cfg && cfg.name) ? cfg.name : key;
+                                        const display_name = (cfg && (cfg.display_name || cfg.name)) ? (cfg.display_name || cfg.name) : name;
+                                        const isVisible = visible ? (visible[uuid] ?? visible[name] ?? false) : null;
+                                        layers.push({ uuid, name, display_name, visible: isVisible });
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+                        return { visibleLayers: visible, layerNames, layers, map: { center, zoom, bounds } };
+                    } catch (e) { return null; }
+                }
+                """
+            )
+            if isinstance(state, dict):
+                get_memory_store().set_last_ui_state(get_current_thread(), state)
+        except Exception:
+            pass
         return json.dumps({"ok": True, "view": current})
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})
@@ -265,13 +310,68 @@ async def mmgis_toggle_layer(layer_name: str, on: Optional[bool] = None) -> str:
                     const api = window.mmgisAPI;
                     if (!api || !api.toggleLayer) return 'Error: mmgisAPI.toggleLayer not found';
                     // Accept either a UUID or a human-readable name by using asLayerUUID if available
-                    const id = (typeof api.asLayerUUID === 'function') ? api.asLayerUUID(layer) : layer;
+                    let id = (typeof api.asLayerUUID === 'function') ? api.asLayerUUID(layer) : layer;
+                    if (!id || id === layer) {
+                        try {
+                            if (typeof api.getLayerConfigs === 'function') {
+                                const cfgs = api.getLayerConfigs() || {};
+                                const target = String(layer || '').toLowerCase();
+                                // fuzzy match by display_name or name
+                                for (const [key, cfg] of Object.entries(cfgs)) {
+                                    const nm = (cfg && (cfg.display_name || cfg.name)) || key;
+                                    if (String(nm).toLowerCase().includes(target)) {
+                                        id = (cfg && cfg.uuid) ? cfg.uuid : key;
+                                        break;
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+                    }
                     return Promise.resolve(api.toggleLayer(id || layer, on)).then(() => 'ok');
                 } catch (e) { return 'Error: ' + String(e); }
             }
             """,
             {"layer": layer_name, "on": on},
         )
+        # Persist updated UI state after toggling
+        try:
+            state = await page.evaluate(
+                """
+                () => {
+                    try {
+                        const api = window.mmgisAPI; if (!api) return null;
+                        const map = api.map;
+                        const center = map ? map.getCenter() : null;
+                        const zoom = map ? map.getZoom() : null;
+                        const b = map ? map.getBounds() : null;
+                        const bounds = b ? { north: b.getNorth(), south: b.getSouth(), east: b.getEast(), west: b.getWest() } : null;
+                        const visible = api.getVisibleLayers ? api.getVisibleLayers() : null;
+                        let layerNames = null; let layers = [];
+                        try {
+                            if (api.getLayerConfigs) {
+                                const cfgs = api.getLayerConfigs();
+                                if (cfgs && typeof cfgs === 'object') {
+                                    layerNames = Object.values(cfgs).map(cfg => (cfg && (cfg.display_name || cfg.name)) || null).filter(Boolean);
+                                    const entries = Object.entries(cfgs);
+                                    for (const [key, cfg] of entries) {
+                                        const uuid = (cfg && cfg.uuid) ? cfg.uuid : key;
+                                        const name = (cfg && cfg.name) ? cfg.name : key;
+                                        const display_name = (cfg && (cfg.display_name || cfg.name)) ? (cfg.display_name || cfg.name) : name;
+                                        const isVisible = visible ? (visible[uuid] ?? visible[name] ?? false) : null;
+                                        layers.push({ uuid, name, display_name, visible: isVisible });
+                                    }
+                                }
+                            }
+                        } catch (_) {}
+                        return { visibleLayers: visible, layerNames, layers, map: { center, zoom, bounds } };
+                    } catch (e) { return null; }
+                }
+                """
+            )
+            if isinstance(state, dict):
+                get_memory_store().set_last_ui_state(get_current_thread(), state)
+        except Exception:
+            pass
         return str(result)
     except Exception as e:
         return f"Error in mmgis_toggle_layer: {str(e)}"
@@ -581,7 +681,6 @@ def rag_jsapi_help(method: str, k: int = 8) -> str:
 
 
 tools = [
-    run_api,
     mmgis_eval,
     mmgis_get_state,
     mmgis_set_zoom,

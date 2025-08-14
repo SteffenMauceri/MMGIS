@@ -5,7 +5,8 @@ from langchain_openai import ChatOpenAI
 
 base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 api_key = os.getenv("OLLAMA_API_KEY", "ollama")
-model_name = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+# model_name = os.getenv("OLLAMA_MODEL", "gpt-oss:20b")
+model_name = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 
 
 def create_chat_model(temperature: float = 0) -> ChatOpenAI:
