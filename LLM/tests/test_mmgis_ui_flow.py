@@ -10,7 +10,7 @@ PASADENA = {"lat": 34.1478, "lng": -118.1445, "zoom": 12}
 
 
 async def list_candidate_layers(page):
-    # Prefer the documented getLayerConfigs() which returns an object keyed by human-readable names
+    # Prefer the documented getLayerConfigs() and extract display_name or name for humans
     names = await page.evaluate(
         """
         () => {
@@ -18,7 +18,12 @@ async def list_candidate_layers(page):
                 const api = window.mmgisAPI;
                 if (!api || typeof api.getLayerConfigs !== 'function') return [];
                 const cfgs = api.getLayerConfigs();
-                return Object.keys(cfgs || {});
+                const out = [];
+                for (const [key, cfg] of Object.entries(cfgs || {})) {
+                    const nm = (cfg && (cfg.display_name || cfg.name)) || key;
+                    if (nm) out.push(nm);
+                }
+                return out;
             } catch (e) { return []; }
         }
         """
