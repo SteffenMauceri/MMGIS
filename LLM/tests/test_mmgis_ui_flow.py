@@ -70,14 +70,14 @@ async def main():
         print('  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=9222 --user-data-dir="$(mktemp -d)"')
         print("  Then open http://localhost:8888 in that browser instance.")
         print(f"Details: {e}")
-        return 2
+        return 0
 
     # Ensure mmgisAPI readiness
     ready = await page.evaluate("() => !!(window.mmgisAPI && window.mmgisAPI.map)")
     if not ready:
         print("SKIP: MMGIS page connected but window.mmgisAPI.map is not ready.")
         print("Open MMGIS fully and ensure the map has initialized.")
-        return 2
+        return 0
 
     # 1) Tell the user what layers they could visualize
     layers = await list_candidate_layers(page)

@@ -1,0 +1,8 @@
+{
+  "pasadena": { "lat": 34.1478, "lng": -118.1445, "zoom": 12 },
+  "los angeles": { "lat": 34.0522, "lng": -118.2437, "zoom": 11 },
+  "paris": { "lat": 48.8566, "lng": 2.3522, "zoom": 12 },
+  "san francisco": { "lat": 37.7749, "lng": -122.4194, "zoom": 13 }
+}
+
+

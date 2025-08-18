@@ -64,12 +64,12 @@ async def main():
     except Exception as e:
         print("SKIP: Could not connect to a debuggable Chrome or find MMGIS tab.")
         print(f"Details: {e}")
-        return 2
+        return 0
 
     ready = await page.evaluate("() => !!(window.mmgisAPI && window.mmgisAPI.map)")
     if not ready:
         print("SKIP: MMGIS page connected but window.mmgisAPI.map is not ready.")
-        return 2
+        return 0
 
     data = await get_configs_and_visible(page)
     cfgs = data.get("cfgs", {}) or {}

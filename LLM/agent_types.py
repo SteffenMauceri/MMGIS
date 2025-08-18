@@ -12,5 +12,6 @@ class AgentState(TypedDict):
     thread: Dict[str, Optional[str]]
     scratch: Dict[str, Any]
     step_count: int
+    tool_calls_used: int
 
 

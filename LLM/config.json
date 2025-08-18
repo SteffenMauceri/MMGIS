@@ -1,0 +1,55 @@
+{
+  "llm": {
+    "base_url": "http://localhost:11434/v1",
+    "api_key": "ollama",
+    "model": "gpt-oss:20b",
+    "request_timeout_s": 30,
+    "max_retries": 0
+  },
+  "agent": {
+    "max_steps": 8,
+    "max_tool_calls": 10,
+    "overall_timeout_s": 60
+  },
+  "browser": {
+    "mode": "managed",
+    "cdp_url": "http://localhost:9222",
+    "url_substr": "localhost:8888",
+    "ui_url": "http://localhost:8888",
+    "headless": false,
+    "user_data_dir": "",
+    "chrome_executable": "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "keep_open": false,
+    "wait_for_networkidle": false,
+    "networkidle_timeout_ms": 15000,
+    "post_nav_wait_ms": 3000,
+    "page_timeout_ms": 15000,
+    "wait_ms": 15000
+  },
+  "mmgis_api": {
+    "base_url": "http://localhost:8889",
+    "token": "",
+    "http_timeout_s": 60
+  },
+  "tools": {
+    "mmgis_eval_max_kb": 256
+  },
+  "navigation": {
+    "default_place_zoom": 12,
+    "hi_zoom_default": 13,
+    "hi_zoom_if_zoom_in": 15,
+    "pan_base_deg_at_zoom2": 0.5,
+    "min_pan_deg": 0.01
+  },
+  "summarization": {
+    "summarizer_bullets_max": 8,
+    "planner_context_trunc_chars": 2000,
+    "assistant_response_trunc_chars": 4000,
+    "summarizer_recent_turns": 20,
+    "interactive_summarize_after_turns": 40,
+    "interactive_prune_keep_turns": 10,
+    "recent_messages_load_limit": 50
+  }
+}
+
+

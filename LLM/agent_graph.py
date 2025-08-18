@@ -1,5 +1,8 @@
 import json
 from typing import Any, Dict, List, Optional, Tuple
+import os
+import asyncio
+from LLM.config import get_config_value
 
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
@@ -20,7 +23,7 @@ PLANNER_PROMPT = """You are the orchestrator for MMGIS. Your job is to output EX
 Constraints:
 - You do NOT have tools; only the api_agent can execute tools.
 - Keep each STEP minimal (one coherent action). Examples: "get the UI state", "list missions", "set zoom to 4".
-- Prefer known tools when phrasing the STEP: mmgis_get_state, geocode_place, mmgis_find_layer, mmgis_set_zoom, mmgis_set_view, mmgis_toggle_layer, mmgis_eval, mmgis_http, read_file, list_directory, find_files_by_pattern, rag_search, rag_jsapi_help.
+- Prefer known tools when phrasing the STEP: mmgis_get_state, mmgis_list_layers, geocode_place, mmgis_find_layer, mmgis_set_zoom, mmgis_set_view, mmgis_toggle_layer, mmgis_eval, mmgis_http, read_file, list_directory, find_files_by_pattern.
 - If the user requests the current UI/map state, the FIRST STEP should be to get it: "STEP: get the UI state".
 - If the user is likely finished, emit FINAL.
 """
@@ -34,18 +37,18 @@ Do exactly this:
 1) If the latest planner message starts with FINAL:, do nothing and return immediately (no tools).
 2) If it starts with STEP:, interpret the instruction and EXECUTE it, using as many tool calls as needed.
    - Filesystem: list_directory, read_file, find_files_by_pattern
-   - UI/map: mmgis_get_state, geocode_place, mmgis_find_layer, mmgis_toggle_layer, mmgis_set_zoom, mmgis_set_view, mmgis_eval
+   - UI/map: mmgis_get_state, mmgis_list_layers, geocode_place, mmgis_find_layer, mmgis_toggle_layer, mmgis_set_zoom, mmgis_set_view, mmgis_eval
    - Backend: mmgis_http (inject token from env)
    - Prefer parameterized wrappers over run_api
 3) When the step is successfully completed, reply with a concise summary prefixed with: STEP_DONE:
    - Include only essential results (e.g., missions list, new zoom level)
    - Do not request more tools in this reply
 
-For location+layer intents like "show me <layer> for <place>":
-- Extract the place; call geocode_place for lat/lng/zoom.
-- Call mmgis_get_state to read layer names.
-- Call mmgis_find_layer with the requested theme (e.g., "elevation").
-- Toggle that layer ON (mmgis_toggle_layer) and set view (mmgis_set_view) to the geocoded position.
+For requests to “show X” or “what layer should I use for Y?”:
+- First call mmgis_list_layers() to get names and descriptions.
+- Use your own reasoning over the returned names/descriptions to pick the best match (no synonym gating).
+- If a place is mentioned, call geocode_place for lat/lng/zoom.
+- Toggle the selected layer ON (mmgis_toggle_layer) and set view (mmgis_set_view) with the geocoded position and an appropriate zoom.
 - IMPORTANT: Do not call run_api; use the dedicated tools above only.
 
 State updates:
@@ -62,10 +65,12 @@ Documentation: Consult 'LLM/APIs.md' via read_file if needed before using APIs.
 async def summarize_history(messages: List[Tuple[str, str]], current_brief: Optional[str]) -> str:
     model = create_chat_model(temperature=0)
     head = "" if not current_brief else f"Existing brief summary to update:\n{current_brief}\n\n"
-    content = "\n".join([f"{r.upper()}: {c}" for r, c in messages[-20:]])
+    recent = int(get_config_value("summarization.summarizer_recent_turns", None, 20, int))
+    bullets = int(get_config_value("summarization.summarizer_bullets_max", None, 8, int))
+    content = "\n".join([f"{r.upper()}: {c}" for r, c in messages[-recent:]])
     sys = (
         "You maintain a concise running brief of the conversation. "
-        "Summarize key user intents, important facts, decisions, and next steps in <= 8 bullet points. "
+        f"Summarize key user intents, important facts, decisions, and next steps in <= {bullets} bullet points. "
         "Keep stable identifiers and omit low-level tool I/O."
     )
     prompt = [("system", sys), ("user", head + "Recent turns:\n" + content)]
@@ -85,13 +90,19 @@ def _planner_context(thread: Dict[str, Optional[str]]) -> List[Tuple[str, str]]:
     if brief:
         ctx_lines.append("Brief summary:\n" + brief)
     if facts:
-        ctx_lines.append("Facts (key:value JSON):\n" + json.dumps(facts)[:2000])
+        trunc = int(get_config_value("summarization.planner_context_trunc_chars", None, 2000, int))
+        ctx_lines.append("Facts (key:value JSON):\n" + json.dumps(facts)[:trunc])
     if last_ui is not None:
-        ctx_lines.append("Last known UI state (may be stale):\n" + json.dumps(last_ui)[:2000])
+        trunc = int(get_config_value("summarization.planner_context_trunc_chars", None, 2000, int))
+        ctx_lines.append("Last known UI state (may be stale):\n" + json.dumps(last_ui)[:trunc])
     return [("system", "\n\n".join(ctx_lines))]
 
 
 def create_agent(thread: Dict[str, Optional[str]]):
+    # Global limits
+    max_steps = get_config_value("agent.max_steps", "MMGIS_MAX_STEPS", 8, int)
+    max_tool_calls = get_config_value("agent.max_tool_calls", "MMGIS_MAX_TOOL_CALLS", 10, int)
+    overall_timeout_s = get_config_value("agent.overall_timeout_s", "MMGIS_OVERALL_TIMEOUT_S", 60.0, float)
     planner_model = create_chat_model(temperature=0)
     api_agent_model = create_chat_model(temperature=0).bind_tools(tools)
 
@@ -103,7 +114,7 @@ def create_agent(thread: Dict[str, Optional[str]]):
         return {"messages": [result], "step_count": step_count}
 
     async def api_agent_node(state: AgentState):
-        # Deterministic fallback for pattern: "show me <layer> for <place>"
+        # Deterministic fallbacks when the model can't use tools
         try:
             last_user = None
             for m in reversed(state.get("messages", [])):
@@ -123,6 +134,61 @@ def create_agent(thread: Dict[str, Optional[str]]):
                     break
             if last_user:
                 lowered = last_user.strip().lower()
+
+                # 1) Navigation commands: zoom/pan
+                nav_cmd = None
+                if any(kw in lowered for kw in ["zoom in", "zoom out", "move", "pan", "left", "right", "up", "down", "north", "south"]):
+                    nav_cmd = lowered
+                if nav_cmd is not None:
+                    page = await get_mmgis_page()
+                    # Read current center/zoom
+                    cur = await page.evaluate(
+                        "() => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return null; const c = m.getCenter(); return { lat: c.lat, lng: c.lng, zoom: m.getZoom() }; }"
+                    )
+                    if isinstance(cur, dict):
+                        lat = float(cur.get("lat") or 0.0)
+                        lng = float(cur.get("lng") or 0.0)
+                        zoom = int(cur.get("zoom") or 2)
+                    else:
+                        lat, lng, zoom = 0.0, 0.0, 2
+
+                    # Simple degree shifts scaled by zoom (smaller shift at higher zoom)
+                    try:
+                        scale = max(1, zoom)
+                        base_at_zoom2 = float(get_config_value("navigation.pan_base_deg_at_zoom2", None, 0.5, float))
+                        base = base_at_zoom2 / (2 ** (scale - 2))
+                    except Exception:
+                        base = float(get_config_value("navigation.min_pan_deg", None, 0.01, float))
+
+                    if "zoom in" in nav_cmd or nav_cmd == "zoom":
+                        await page.evaluate("() => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setZoom(m.getZoom()+1); }")
+                        await tool_get_state()
+                        return {"messages": [("assistant", "FINAL: zoomed in")]} 
+                    if "zoom out" in nav_cmd:
+                        await page.evaluate("() => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setZoom(m.getZoom()-1); }")
+                        await tool_get_state()
+                        return {"messages": [("assistant", "FINAL: zoomed out")]} 
+
+                    # Panning
+                    dlat, dlng = 0.0, 0.0
+                    if "right" in nav_cmd:
+                        dlng += base
+                    if "left" in nav_cmd:
+                        dlng -= base
+                    if "up" in nav_cmd or "north" in nav_cmd:
+                        dlat += base
+                    if "down" in nav_cmd or "south" in nav_cmd:
+                        dlat -= base
+                    new_lat = lat + dlat
+                    new_lng = lng + dlng
+                    await page.evaluate(
+                        "({lat, lng, zoom}) => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setView([lat, lng], zoom); }",
+                        {"lat": new_lat, "lng": new_lng, "zoom": zoom},
+                    )
+                    await tool_get_state()
+                    return {"messages": [("assistant", f"FINAL: panned to {new_lat:.6f},{new_lng:.6f} z={zoom}")]} 
+
+                # 2) Deterministic fallback for pattern: "show me <layer> for/of <place>"
                 if lowered.startswith("show me ") and (" for " in lowered or " of " in lowered):
                     # parse
                     try:
@@ -139,7 +205,7 @@ def create_agent(thread: Dict[str, Optional[str]]):
                     # geocode (offline-first)
                     lat = None
                     lng = None
-                    zoom = 12
+                    zoom = int(get_config_value("navigation.default_place_zoom", None, 12, int))
                     builtins = {
                         "pasadena": {"lat": 34.1478, "lng": -118.1445, "zoom": 12},
                         "los angeles": {"lat": 34.0522, "lng": -118.2437, "zoom": 11},
@@ -214,8 +280,10 @@ def create_agent(thread: Dict[str, Optional[str]]):
                             """,
                             selected,
                         )
-                    # set view (zoom higher if user asked to zoom in)
-                    hi_zoom = 15 if "zoom in" in lowered else zoom
+                    # set view (zoom higher by default for clarity; even higher if user asked to zoom in)
+                    hi_zoom_default = int(get_config_value("navigation.hi_zoom_default", None, 13, int))
+                    hi_zoom_zoom_in = int(get_config_value("navigation.hi_zoom_if_zoom_in", None, 15, int))
+                    hi_zoom = hi_zoom_default if "zoom in" not in lowered else hi_zoom_zoom_in
                     await page.evaluate(
                         """
                         ({lat, lng, zoom}) => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setView([lat, lng], zoom ?? m.getZoom()); }
@@ -228,7 +296,7 @@ def create_agent(thread: Dict[str, Optional[str]]):
                     except Exception:
                         pass
                     # done
-                    content = f"STEP_DONE: Showing {theme or 'requested layer'} for {place} at ({lat:.4f}, {lng:.4f}) z={hi_zoom}"
+                    content = f"FINAL: Showing {theme or 'requested layer'} for {place} at ({lat:.4f}, {lng:.4f}) z={hi_zoom}"
                     return {"messages": [("assistant", content)]}
         except Exception:
             pass
@@ -238,7 +306,33 @@ def create_agent(thread: Dict[str, Optional[str]]):
         result = await api_agent_model.ainvoke(messages)
         return {"messages": [result]}
 
-    tool_node = ToolNode(tools)
+    class BudgetedToolNode(ToolNode):
+        async def aexecute(self, state: AgentState):  # type: ignore[override]
+            used = int(state.get("tool_calls_used", 0))
+            if used >= max_tool_calls:
+                # Convert to a planner-visible message to finalize
+                return {"messages": [("assistant", f"FINAL: Stopping after {used} tool calls (budget exhausted).")]}  # type: ignore[return-value]
+            out = await super().aexecute(state)
+            # Increment budget counter if any tool was actually called
+            try:
+                last = out.get("messages", [])[-1]
+                has_tool = False
+                try:
+                    tool_calls = getattr(last, "tool_calls", None)
+                except Exception:
+                    tool_calls = None
+                if not tool_calls:
+                    ak = getattr(last, "additional_kwargs", {}) or {}
+                    tool_calls = ak.get("tool_calls")
+                has_tool = bool(tool_calls)
+            except Exception:
+                has_tool = False
+            if has_tool:
+                used += 1
+            out["tool_calls_used"] = used
+            return out
+
+    tool_node = BudgetedToolNode(tools)
 
     graph = StateGraph(AgentState)
     graph.add_node("planner", planner_node)
@@ -254,7 +348,8 @@ def create_agent(thread: Dict[str, Optional[str]]):
             content = " ".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
         if isinstance(content, str) and content.strip().upper().startswith("FINAL:"):
             return END
-        if state.get("step_count", 0) >= 8:
+        # Step budget
+        if state.get("step_count", 0) >= max_steps:
             return END
         return "api_agent"
 
@@ -262,13 +357,36 @@ def create_agent(thread: Dict[str, Optional[str]]):
 
     def continue_from_api_agent(state: AgentState):
         last = state["messages"][-1]
-        if getattr(last, "tool_calls", None):
+        # LangChain Chat messages store tool calls under additional_kwargs.tool_calls
+        try:
+            tool_calls = getattr(last, "tool_calls", None)
+        except Exception:
+            tool_calls = None
+        if not tool_calls:
+            try:
+                ak = getattr(last, "additional_kwargs", {}) or {}
+                tool_calls = ak.get("tool_calls")
+            except Exception:
+                tool_calls = None
+        if tool_calls:
             return "tools"
         return "planner"
 
     graph.add_conditional_edges("api_agent", continue_from_api_agent, {"tools": "tools", "planner": "planner"})
     graph.add_edge("tools", "api_agent")
 
-    return graph.compile()
+    app = graph.compile()
+
+    # Wrap ainvoke with an overall timeout
+    original_ainvoke = app.ainvoke
+
+    async def ainvoke_with_timeout(input_state: AgentState, *args, **kwargs):
+        try:
+            return await asyncio.wait_for(original_ainvoke(input_state, *args, **kwargs), timeout=overall_timeout_s)
+        except asyncio.TimeoutError:
+            return {"messages": [("assistant", f"FINAL: Stopping after {overall_timeout_s:.0f}s (overall timeout).")]}  # type: ignore[return-value]
+
+    app.ainvoke = ainvoke_with_timeout  # type: ignore[attr-defined]
+    return app
 
 

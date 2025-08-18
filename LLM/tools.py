@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 
 from LLM.browser import get_mmgis_page
 from LLM.state import get_memory_store, get_current_thread
+from LLM.config import get_config_value
 
 
 @tool
@@ -56,6 +57,12 @@ async def mmgis_eval(expr: str, max_kb: int = 256) -> str:
         if result is None:
             return "null"
         encoded = result.encode("utf-8")
+        # If caller used default, allow config to override
+        if int(max_kb) == 256:
+            try:
+                max_kb = int(get_config_value("tools.mmgis_eval_max_kb", None, 256, int))
+            except Exception:
+                max_kb = 256
         limit = max(1, int(max_kb)) * 1024
         if len(encoded) > limit:
             truncated = encoded[: limit - 3].decode("utf-8", errors="ignore") + "..."
@@ -135,6 +142,44 @@ async def mmgis_get_state() -> str:
 
 
 @tool
+async def mmgis_list_layers() -> str:
+    """Return a detailed list of available layers from mmgisAPI.getLayerConfigs().
+    Each entry includes at least { uuid, name, display_name } and may include
+    { type, kind, category, group, description, tags } when available.
+    """
+    print("---TOOL CALLED: mmgis_list_layers---")
+    try:
+        page = await get_mmgis_page()
+        cfgs = await page.evaluate(
+            """
+            () => {
+                try {
+                    const api = window.mmgisAPI; if (!api || !api.getLayerConfigs) return {};
+                    return api.getLayerConfigs() || {};
+                } catch (e) { return {}; }
+            }
+            """
+        )
+        layers = []
+        if isinstance(cfgs, dict):
+            for key, cfg in cfgs.items():
+                cfg = cfg or {}
+                entry = {
+                    "uuid": cfg.get("uuid") or key,
+                    "name": cfg.get("name") or key,
+                    "display_name": cfg.get("display_name") or cfg.get("name") or key,
+                }
+                # Optional metadata if present
+                for k in ["type", "kind", "category", "group", "description", "tags"]:
+                    if k in cfg:
+                        entry[k] = cfg.get(k)
+                layers.append(entry)
+        return json.dumps({"ok": True, "layers": layers})
+    except Exception as e:
+        return json.dumps({"ok": False, "error": str(e)})
+
+
+@tool
 def geocode_place(place: str) -> str:
     """
     Resolve a place name to lat/lng coordinates and a reasonable zoom.
@@ -165,6 +210,7 @@ def geocode_place(place: str) -> str:
             "pasadena": {"lat": 34.1478, "lng": -118.1445, "zoom": 12},
             "los angeles": {"lat": 34.0522, "lng": -118.2437, "zoom": 11},
             "paris": {"lat": 48.8566, "lng": 2.3522, "zoom": 12},
+            "san francisco": {"lat": 37.7749, "lng": -122.4194, "zoom": 13},
         }
         # allow city with suffix like ", ca" or ", california"
         for k, v in builtins.items():
@@ -175,6 +221,12 @@ def geocode_place(place: str) -> str:
         return json.dumps({"ok": False, "error": f"Unknown place: {place}"})
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})
+
+
+@tool
+def mmgis_geocode_place(place: str) -> str:
+    """Alias for geocode_place to accommodate models that prefix with mmgis_."""
+    return geocode_place(place)
 
 
 @tool
@@ -201,6 +253,8 @@ async def mmgis_find_layer(query: str) -> str:
         synonyms = {
             "elevation": ["elevation", "terrain", "hillshade"],
             "wind": ["wind", "hrrr", "gfs"],
+            "imagery": ["imagery", "satellite", "world imagery", "esri", "firefly"],
+            "satellite": ["satellite", "imagery", "world imagery", "esri", "firefly"],
         }
         tokens = set(q.split())
         expanded: List[str] = []
@@ -226,6 +280,7 @@ async def mmgis_find_layer(query: str) -> str:
         return json.dumps({"ok": True, "matches": matches})
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})
+
 
 @tool
 async def mmgis_set_zoom(zoom: int) -> str:
@@ -295,6 +350,19 @@ async def mmgis_set_view(lat: float, lng: float, zoom: Optional[int] = None) -> 
         return json.dumps({"ok": True, "view": current})
     except Exception as e:
         return json.dumps({"ok": False, "error": str(e)})
+
+
+@tool
+async def mmgis_set_view_center(center: Dict[str, float], zoom: Optional[int] = None) -> str:
+    """Set the map view given a center object {lat, lng} plus optional zoom.
+    This is a convenience alias for models that pass a 'center' dict.
+    """
+    try:
+        lat = float(center.get("lat"))
+        lng = float(center.get("lng"))
+    except Exception:
+        return json.dumps({"ok": False, "error": "center must include numeric lat and lng"})
+    return await mmgis_set_view(lat, lng, zoom)
 
 
 @tool
@@ -385,13 +453,14 @@ def mmgis_http(method: str, path: str, params: Optional[dict] = None, json_body:
     """
     print(f"---TOOL CALLED: mmgis_http {method} {path}---")
     try:
-        base = os.getenv("MMGIS_API_BASE", "http://localhost:8889")
+        base = get_config_value("mmgis_api.base_url", "MMGIS_API_BASE", "http://localhost:8889", str)
         url = base.rstrip("/") + "/" + path.lstrip("/")
         hdrs = dict(headers or {})
-        token = os.getenv("MMGIS_API_TOKEN")
+        token = get_config_value("mmgis_api.token", "MMGIS_API_TOKEN", None)
         if token and "Authorization" not in hdrs:
             hdrs["Authorization"] = f"Bearer {token}"
-        r = requests.request(method.upper(), url, params=params, json=json_body, headers=hdrs, timeout=60)
+        http_timeout = get_config_value("mmgis_api.http_timeout_s", None, 60, int)
+        r = requests.request(method.upper(), url, params=params, json=json_body, headers=hdrs, timeout=http_timeout)
         return r.text
     except Exception as e:
         return f"Error in mmgis_http: {str(e)}"
@@ -402,13 +471,14 @@ def mmgis_get_missions() -> str:
     """Return the list of missions, preferring backend /api/configure/missions, falling back to scanning the Missions/ directory."""
     print("---TOOL CALLED: mmgis_get_missions---")
     try:
-        base = os.getenv("MMGIS_API_BASE", "http://localhost:8889")
+        base = get_config_value("mmgis_api.base_url", "MMGIS_API_BASE", "http://localhost:8889", str)
         url = base.rstrip("/") + "/api/configure/missions"
         hdrs = {}
-        token = os.getenv("MMGIS_API_TOKEN")
+        token = get_config_value("mmgis_api.token", "MMGIS_API_TOKEN", None)
         if token:
             hdrs["Authorization"] = f"Bearer {token}"
-        r = requests.get(url, headers=hdrs, timeout=30)
+        http_timeout = get_config_value("mmgis_api.http_timeout_s", None, 60, int)
+        r = requests.get(url, headers=hdrs, timeout=http_timeout)
         if r.ok:
             try:
                 data = r.json()
@@ -486,214 +556,98 @@ def memory_set_fact(key: str, value_json: str) -> str:
         return json.dumps({"ok": False, "error": str(e)})
 
 
-@tool
-def rag_search(query: str, k: int = 5, api_kind: Optional[str] = None) -> str:
-    """Semantic search the local MMGIS docs index. Returns JSON with results including title and source_url.
-    Optional api_kind filters: 'javascript_api', 'backend_api', 'configure_rest_api', 'docs'."""
-    print(f"---TOOL CALLED: rag_search q='{query}' k={k} kind={api_kind}---")
-    try:
-        from langchain_community.vectorstores import Chroma
-
-        backend = os.getenv("EMBED_BACKEND")
-        openai_base = os.getenv("OPENAI_BASE_URL")
-        openai_key = os.getenv("OPENAI_API_KEY")
-        ollama_base = os.getenv("OLLAMA_BASE_URL")
-        if backend is None:
-            if openai_base or openai_key:
-                backend = "openai"
-            elif ollama_base:
-                backend = "ollama"
-            else:
-                backend = "hf"
-
-        if backend == "openai":
-            from langchain_openai import OpenAIEmbeddings
-            model = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-            if openai_base:
-                os.environ["OPENAI_BASE_URL"] = openai_base
-            if openai_key:
-                os.environ["OPENAI_API_KEY"] = openai_key
-            embeddings = OpenAIEmbeddings(model=model)
-        elif backend == "ollama":
-            from langchain_community.embeddings import OllamaEmbeddings
-            model = os.getenv("EMBED_MODEL", "nomic-embed-text")
-            base = ollama_base or "http://localhost:11434"
-            embeddings = OllamaEmbeddings(model=model, base_url=base)
-        else:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            model = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-            embeddings = HuggingFaceEmbeddings(model_name=model)
-        index_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "rag", "index"))
-
-        def _slug(s: str) -> str:
-            return "".join(ch if ch.isalnum() else "_" for ch in s)[:128]
-
-        collection_name = os.getenv("EMBED_COLLECTION") or f"mmgis_docs__{_slug(backend)}__{_slug(model)}"
-        if not os.path.isdir(index_dir):
-            return json.dumps({"ok": False, "error": f"Index directory not found: {index_dir}"})
-
-        vs = Chroma(persist_directory=index_dir, embedding_function=embeddings, collection_name=collection_name)
-        k = max(1, int(k))
-        docs = vs.similarity_search(query, k=k)
-
-        results = []
-        for d in docs:
-            md = cast(dict, getattr(d, "metadata", {}))
-            if api_kind and md.get("api_kind") != api_kind:
-                continue
-            results.append({
-                "title": md.get("title", ""),
-                "source_url": md.get("source_url", ""),
-                "api_kind": md.get("api_kind", ""),
-                "snippet": d.page_content[:500]
-            })
-        return json.dumps({"ok": True, "results": results})
-    except Exception as e:
-        return json.dumps({"ok": False, "error": str(e)})
+ 
 
 
 @tool
-def rag_jsapi_help(method: str, k: int = 8) -> str:
-    """Return structured guidance for a JavaScript API method from the local index.
-    Extracts the method section, parameters, and example code fences where possible.
+async def execute_ui_intent(intent: str, args: Optional[dict] = None) -> str:
     """
+    Execute a UI intent on the MMGIS page.
+    Args:
+        intent: The name of the intent (e.g., "panTo", "zoomTo", "toggleLayer", "setView").
+        args: A dictionary of arguments for the intent.
+    Returns:
+        A JSON string indicating success or failure.
+    """
+    print(f"---TOOL CALLED: execute_ui_intent intent={intent} args={args}---")
     try:
-        from langchain_community.vectorstores import Chroma
-
-        backend = os.getenv("EMBED_BACKEND")
-        openai_base = os.getenv("OPENAI_BASE_URL")
-        openai_key = os.getenv("OPENAI_API_KEY")
-        ollama_base = os.getenv("OLLAMA_BASE_URL")
-        if backend is None:
-            if openai_base or openai_key:
-                backend = "openai"
-            elif ollama_base:
-                backend = "ollama"
-            else:
-                backend = "hf"
-
-        if backend == "openai":
-            from langchain_openai import OpenAIEmbeddings
-            model = os.getenv("EMBED_MODEL", "text-embedding-3-small")
-            if openai_base:
-                os.environ["OPENAI_BASE_URL"] = openai_base
-            if openai_key:
-                os.environ["OPENAI_API_KEY"] = openai_key
-            embeddings = OpenAIEmbeddings(model=model)
-        elif backend == "ollama":
-            from langchain_community.embeddings import OllamaEmbeddings
-            model = os.getenv("EMBED_MODEL", "nomic-embed-text")
-            base = ollama_base or "http://localhost:11434"
-            embeddings = OllamaEmbeddings(model=model, base_url=base)
-        else:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-            model = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
-            embeddings = HuggingFaceEmbeddings(model_name=model)
-
-        def _slug(s: str) -> str:
-            return "".join(ch if ch.isalnum() else "_" for ch in s)[:128]
-
-        index_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "rag", "index"))
-        collection = os.getenv("EMBED_COLLECTION")
-        if not collection:
-            jsapi_col = f"mmgis_jsapi__{_slug(backend)}__{_slug(model)}"
-            collection = jsapi_col
-        if not os.path.isdir(index_dir):
-            return json.dumps({"ok": False, "error": f"Index directory not found: {index_dir}"})
-
-        vs = Chroma(persist_directory=index_dir, embedding_function=embeddings, collection_name=collection)
-
-        query = f"{method} parameters mmgisAPI.{method}"
-        docs = vs.similarity_search(query, k=max(3, int(k)))
-
-        def extract_section(text: str, method_name: str) -> str:
-            lines = text.splitlines()
-            pattern = re.compile(rf"^\s*#{2,4}\s+.*\b{re.escape(method_name)}\b.*", re.IGNORECASE)
-            start = None
-            for i, ln in enumerate(lines):
-                if pattern.match(ln):
-                    start = i
-                    break
-            if start is None:
-                return text[:1200]
-            for j in range(start + 1, len(lines)):
-                if re.match(r"^\s*#{1,4}\s+", lines[j]):
-                    return "\n".join(lines[start:j]).strip()
-            return "\n".join(lines[start:]).strip()
-
-        def extract_params(block: str) -> List[str]:
-            params: List[str] = []
-            in_params = False
-            for ln in block.splitlines():
-                if ln.strip().lower().startswith("####  function parameters"):
-                    in_params = True
-                    continue
-                if in_params and re.match(r"^\s*#{1,4}\s+", ln):
-                    break
-                if in_params and re.match(r"^\s*[*\-]\s+", ln):
-                    params.append(re.sub(r"^\s*[*\-]\s+", "", ln).strip())
-            return params
-
-        def extract_examples(block: str) -> List[str]:
-            examples: List[str] = []
-            fence = "```"
-            cur: List[str] = []
-            inside = False
-            for ln in block.splitlines():
-                if ln.strip().startswith(fence):
-                    if inside:
-                        examples.append("\n".join(cur).strip())
-                        cur = []
-                        inside = False
-                    else:
-                        inside = True
-                        continue
-                elif inside:
-                    cur.append(ln)
-            return examples
-
-        best = None
-        for d in docs:
-            section = extract_section(d.page_content, method)
-            if section:
-                best = section
-                break
-        if best is None and docs:
-            best = docs[0].page_content
-        if best is None:
-            return json.dumps({"ok": False, "error": "No documentation found"})
-
-        params = extract_params(best)
-        examples = extract_examples(best)
-        title_match = re.search(r"^\s*#{2,4}\s+(.*)$", best, flags=re.MULTILINE)
-        title = title_match.group(1).strip() if title_match else method
-
-        return json.dumps({
-            "ok": True,
-            "method": method,
-            "title": title,
-            "parameters": params,
-            "examples": examples[:3],
-            "excerpt": best[:1200],
-        })
+        page = await get_mmgis_page()
+        args = args or {}
+        if intent == "panTo":
+            lat = args.get("lat")
+            lng = args.get("lng")
+            zoom = args.get("zoom")
+            if lat is not None and lng is not None:
+                await page.evaluate(
+                    "({lat, lng, zoom}) => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.panTo([lat, lng], zoom ?? m.getZoom()); }",
+                    {"lat": lat, "lng": lng, "zoom": zoom},
+                )
+                return json.dumps({"ok": True, "message": f"Panned to {lat}, {lng} with zoom {zoom}"})
+            return json.dumps({"ok": False, "error": "Missing lat or lng in panTo args"})
+        if intent == "zoomTo":
+            lat = args.get("lat")
+            lng = args.get("lng")
+            zoom = args.get("zoom")
+            if lat is not None and lng is not None and zoom is not None:
+                await page.evaluate(
+                    "({lat, lng, zoom}) => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setView([lat, lng], zoom); }",
+                    {"lat": lat, "lng": lng, "zoom": zoom},
+                )
+                return json.dumps({"ok": True, "message": f"Zoomed to {lat}, {lng} with zoom {zoom}"})
+            return json.dumps({"ok": False, "error": "Missing lat, lng, or zoom in zoomTo args"})
+        if intent == "toggleLayer":
+            layer_name = args.get("layer_name")
+            on = args.get("on")
+            if layer_name is not None:
+                await page.evaluate(
+                    "({name, on}) => { const api = window.mmgisAPI; if(!api || !api.toggleLayer) return; return Promise.resolve(api.toggleLayer(name, on)); }",
+                    {"name": layer_name, "on": on},
+                )
+                return json.dumps({"ok": True, "message": f"Toggled layer '{layer_name}' to {on}"})
+            return json.dumps({"ok": False, "error": "Missing layer_name in toggleLayer args"})
+        if intent == "setView":
+            lat = args.get("lat")
+            lng = args.get("lng")
+            zoom = args.get("zoom")
+            if lat is not None and lng is not None:
+                await page.evaluate(
+                    "({lat, lng, zoom}) => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setView([lat, lng], zoom ?? m.getZoom()); }",
+                    {"lat": lat, "lng": lng, "zoom": zoom},
+                )
+                return json.dumps({"ok": True, "message": f"Set view to {lat}, {lng} with zoom {zoom}"})
+            return json.dumps({"ok": False, "error": "Missing lat or lng in setView args"})
+        if intent == "setZoom":
+            zoom = args.get("zoom")
+            if zoom is not None:
+                await page.evaluate(
+                    "(z) => { const m = window.mmgisAPI && window.mmgisAPI.map; if(!m) return; m.setZoom(z); }",
+                    int(args.get("zoom")),
+                )
+                return json.dumps({"ok": True, "message": f"Set zoom to {zoom}"})
+            return json.dumps({"ok": False, "error": "Missing zoom in setZoom args"})
+        return json.dumps({"ok": False, "error": f"Unknown intent: {intent}"})
     except Exception as e:
-        return json.dumps({"ok": False, "error": str(e)})
+        return json.dumps({"ok": False, "error": f"Error executing UI intent: {str(e)}"})
 
 
 tools = [
     mmgis_eval,
     mmgis_get_state,
+    mmgis_list_layers,
     mmgis_set_zoom,
     mmgis_set_view,
+    mmgis_set_view_center,
     mmgis_toggle_layer,
+    geocode_place,
+    mmgis_geocode_place,
+    mmgis_find_layer,
     mmgis_http,
     mmgis_get_missions,
+    execute_ui_intent,
     read_file,
     list_directory,
     find_files_by_pattern,
     memory_set_fact,
-    rag_search,
-    rag_jsapi_help,
 ]
 
 
