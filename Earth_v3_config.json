@@ -1,0 +1,333 @@
+{
+  "msv": {
+    "mission": "Earth",
+    "site": "ert",
+    "masterdb": false,
+    "view": [
+      "40",
+      "-100",
+      "8"
+    ],
+    "radius": {
+      "major": "6371008",
+      "minor": "6371008"
+    },
+    "mapscale": ""
+  },
+  "projection": {
+    "custom": false,
+    "epsg": "",
+    "proj": "",
+    "xmlpath": "",
+    "bounds": [
+      "",
+      "",
+      "",
+      ""
+    ],
+    "origin": [
+      "",
+      ""
+    ],
+    "reszoomlevel": "",
+    "resunitsperpixel": ""
+  },
+  "coordinates": {
+    "coordll": true,
+    "coorden": true,
+    "coordrxy": true,
+    "coordsite": false,
+    "coordlngoffset": "",
+    "coordlatoffset": "",
+    "coordeastoffset": "",
+    "coordnorthoffset": "",
+    "coordeastmult": "",
+    "coordnorthmult": "",
+    "coordcustomproj": false,
+    "coordcustomprojname": "",
+    "coordcustomprojnamex": "",
+    "coordcustomprojnamey": "",
+    "coordcustomprojnamez": "",
+    "coordsecondaryproj": false,
+    "coordsecondaryprojname": "",
+    "coordsecondaryprojnamex": "",
+    "coordsecondaryprojnamey": "",
+    "coordsecondaryprojnamez": "",
+    "coordsecondaryprojstr": "",
+    "coordelev": false,
+    "coordelevurl": "",
+    "coordmain": "ll",
+    "variables": {}
+  },
+  "look": {
+    "pagename": "MMGIS",
+    "minimalist": true,
+    "topbar": true,
+    "toolbar": true,
+    "scalebar": true,
+    "coordinates": true,
+    "zoomcontrol": false,
+    "graticule": false,
+    "miscellaneous": true,
+    "settings": true,
+    "primarycolor": "",
+    "secondarycolor": "",
+    "tertiarycolor": "",
+    "accentcolor": "",
+    "bodycolor": "",
+    "topbarcolor": "",
+    "toolbarcolor": "",
+    "mapcolor": "",
+    "highlightcolor": "",
+    "copylink": true,
+    "screenshot": true,
+    "fullscreen": true,
+    "info": false,
+    "infourl": "",
+    "help": true,
+    "logourl": "",
+    "helpurl": ""
+  },
+  "panels": {
+    "viewer": true,
+    "map": true,
+    "globe": true
+  },
+  "panelSettings": {
+    "demFallbackPath": "",
+    "demFallbackFormat": null,
+    "demFallbackType": null
+  },
+  "tools": [
+    {
+      "name": "Identifier",
+      "icon": "map-marker",
+      "js": "IdentifierTool",
+      "separatedTool": true,
+      "variables": {
+        "ARIA Displacement Map": {
+          "url": "Layers/ARIA_DPMraw_Sentinel-1_Turkiye_EQ.tif",
+          "unit": " m"
+        }
+      }
+    },
+    {
+      "name": "Layers",
+      "icon": "layers",
+      "js": "LayersTool"
+    },
+    {
+      "name": "Legend",
+      "icon": "format-list-bulleted-type",
+      "js": "LegendTool",
+      "separatedTool": true
+    },
+    {
+      "name": "Info",
+      "icon": "information-variant",
+      "js": "InfoTool"
+    },
+    {
+      "name": "Measure",
+      "icon": "chart-areaspline",
+      "js": "MeasureTool",
+      "variables": {
+        "dem": "Layers/Nevada_S1_20241204_20241216_UNW.tif"
+      }
+    },
+    {
+      "name": "Draw",
+      "icon": "pencil",
+      "js": "DrawTool",
+      "variables": {
+        "scienceIntent": false
+      }
+    }
+  ],
+  "layers": [
+    {
+      "name": "HRRR Wind 10m",
+      "uuid": "dc2eec6d-3f02-4309-9d45-c55c529c4bc7",
+      "sublayers": [],
+      "type": "velocity",
+      "kind": "streamlines",
+      "visibility": false,
+      "url": "https://miplmmgis.jpl.nasa.gov/veloserver/hrrr/gribjson/{time}/",
+      "maxZoom": 22,
+      "initialOpacity": 1,
+      "controlled": false,
+      "variables": {
+        "streamlines": {
+          "displayValues": true,
+          "colorScale": "RDYLBU_R",
+          "displayPosition": "bottomleft"
+        }
+      },
+      "style": {
+        "color": "#FFFFFF"
+      },
+      "time": {
+        "enabled": true,
+        "type": "requery",
+        "format": "undefined",
+        "startProp": "",
+        "endProp": "",
+        "refreshIntervalEnabled": false
+      },
+      "description": ""
+    },
+    {
+      "name": "GFS Wind 10m",
+      "uuid": "2971584f-2fea-4ac7-bb4e-b5e9d7e62a60",
+      "sublayers": [],
+      "type": "velocity",
+      "kind": "streamlines",
+      "visibility": false,
+      "url": "https://miplmmgis.jpl.nasa.gov/veloserver/gfs/gribjson/{time}/",
+      "maxZoom": 22,
+      "initialOpacity": 1,
+      "controlled": false,
+      "variables": {
+        "streamlines": {
+          "displayValues": true,
+          "colorScale": "RDYLBU_R",
+          "displayPosition": "bottomleft"
+        }
+      },
+      "style": {
+        "color": "#FFFFFF"
+      },
+      "time": {
+        "enabled": true,
+        "type": "requery",
+        "format": "%Y-%m-%dT%H:%M:%SZ",
+        "startProp": "",
+        "endProp": "",
+        "refreshIntervalEnabled": false
+      },
+      "description": ""
+    },
+    {
+      "name": "World Imagery Firefly",
+      "uuid": "b082329a-0725-4afe-b676-6d382e296981",
+      "sublayers": [],
+      "type": "tile",
+      "visibility": true,
+      "sourceType": "url",
+      "url": "https://fly.maptiles.arcgis.com/arcgis/rest/services/World_Imagery_Firefly/MapServer/tile/{z}/{y}/{x}.png",
+      "tileformat": "wmts",
+      "controlled": false,
+      "initialOpacity": 1,
+      "minZoom": 0,
+      "maxNativeZoom": 16,
+      "maxZoom": 18,
+      "throughTileServer": false,
+      "tileMatrixSet": "WebMercatorQuad",
+      "cogResampling": "nearest",
+      "cogTransform": false,
+      "cogColormap": "viridis",
+      "demparser": "",
+      "style": {
+        "brightness": 1,
+        "contrast": 1,
+        "saturation": 1,
+        "blend": "none"
+      },
+      "time": {
+        "enabled": false,
+        "type": "requery",
+        "format": "%Y-%m-%dT%H:%M:%SZ",
+        "compositeTile": false,
+        "refreshIntervalEnabled": false
+      },
+      "description": ""
+    },
+    {
+      "name": "elevation-tiles",
+      "uuid": "2662abf0-511d-4be7-8f25-b7f6b5bcd9f0",
+      "sublayers": [],
+      "type": "tile",
+      "visibility": false,
+      "sourceType": "url",
+      "url": "https://s3.amazonaws.com/elevation-tiles-prod/normal/{z}/{x}/{y}.png",
+      "tileformat": "wms",
+      "controlled": false,
+      "initialOpacity": 1,
+      "minZoom": 0,
+      "maxNativeZoom": 16,
+      "maxZoom": 18,
+      "throughTileServer": false,
+      "tileMatrixSet": "WebMercatorQuad",
+      "cogResampling": "nearest",
+      "cogTransform": false,
+      "cogColormap": "viridis",
+      "demparser": "",
+      "style": {
+        "brightness": 1,
+        "contrast": 1,
+        "saturation": 1,
+        "blend": "none"
+      },
+      "time": {
+        "enabled": false,
+        "type": "requery",
+        "format": "%Y-%m-%dT%H:%M:%SZ",
+        "compositeTile": false,
+        "refreshIntervalEnabled": false
+      },
+      "description": ""
+    },
+    {
+      "name": "National Geographic World Map",
+      "uuid": "84ca9fa8-f5e4-41cf-b17f-0f2cd80868c7",
+      "sublayers": [],
+      "type": "tile",
+      "visibility": false,
+      "sourceType": "url",
+      "url": "https://services.arcgisonline.com/arcgis/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}",
+      "tileformat": "wmts",
+      "controlled": false,
+      "initialOpacity": 1,
+      "minZoom": 0,
+      "maxNativeZoom": 12,
+      "maxZoom": 22,
+      "throughTileServer": false,
+      "tileMatrixSet": "WebMercatorQuad",
+      "cogResampling": "nearest",
+      "cogTransform": false,
+      "cogColormap": "viridis",
+      "demparser": "",
+      "boundingBox": [
+        -180,
+        -90,
+        180,
+        90
+      ],
+      "style": {
+        "brightness": 1,
+        "contrast": 1,
+        "saturation": 1,
+        "blend": "none"
+      },
+      "time": {
+        "enabled": false,
+        "type": "requery",
+        "format": "%Y-%m-%dT%H:%M:%SZ",
+        "compositeTile": false,
+        "refreshIntervalEnabled": false
+      },
+      "description": ""
+    }
+  ],
+  "time": {
+    "enabled": true,
+    "visible": true,
+    "initiallyOpen": true,
+    "startInPointMode": true,
+    "format": "%Y-%m-%dT%H:%M:%SZ",
+    "initialstart": "",
+    "initialend": "now - 172800",
+    "initialwindowstart": "",
+    "initialwindowend": ""
+  }
+}
